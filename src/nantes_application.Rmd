@@ -25,7 +25,7 @@ ORIGINAL_SYNTHETIC_POPULATION <- "synth_pop_original.feather"
 FILOSI_DECILES <- "deciles_filosofi.feather"
 ```
 
-## Script 1
+## Script 1 (4.1.1 dans l'article)
 
 ```{r, echo=FALSE, warning=FALSE, message=FALSE}
 #### Read synthetic population ####
@@ -38,7 +38,6 @@ summary(synth_pop)
 # The dataframe synth_pop is the synthetic household population for the city of nantes.
 # We have 157,647 households. Each row of synth_pop is therefore a household.
 
-# TODO get values from unique values of synth_pop
 Age.lv <- c("0_29", "30_39",  "40_49", "50_59", "60_74", "75_or_more")
 Size.lv <- c("1_pers", "2_pers", "3_pers", "4_pers", "5_pers_or_more")
 Owner.lv <- c("Tenant", "Owner")
@@ -74,6 +73,7 @@ prob_simple <- function(x) {
   return(B)
 }
 
+# probabilité unitaires : proportion
 prob_age <- c(prob_simple(synth_pop$age))
 prob_comp <- c(prob_simple(x = synth_pop$family_comp))
 prob_size <- c(prob_simple(x = synth_pop$size))
@@ -100,49 +100,61 @@ synth_pop2$total <-
   paste(synth_pop2$ownership,
         synth_pop2$age,
         synth_pop2$size,
-        synth_pop2$family_comp)
+        synth_pop2$family_comp) # concaténation des modalités
+
+
 synt_pop_comb <-
   expand.grid(
     ownership = levels(synth_pop$ownership),
     age = levels(synth_pop$age),
     size = levels(synth_pop$size),
     family_comp = levels(synth_pop$family_comp)
-  )
+  ) # toutes les modalités croisées de la population synthétique
 synt_pop_comb$total <-
   paste(
     synt_pop_comb$ownership,
     synt_pop_comb$age,
     synt_pop_comb$size,
     synt_pop_comb$family_comp
-  )
+  )  # concaténation des modalités
 
-combi_diff <- anti_join(synt_pop_comb, synth_pop2, by = "total")
+
+combi_diff <- anti_join(synt_pop_comb, synth_pop2, by = "total") # toutes les combinaisons de modalités qui n'apparaissent pas dans la pop synth donc celles qui valent 0
 combi_diff <- combi_diff %>%
-  arrange(c(factor(family_comp, levels = dec_fam_comp)), (factor(size, levels =
-                                                                   dec_size)), (factor(age, levels = dec_age)), (factor(ownership, levels =
-                                                                                                                          dec_owner)))
-nrow(combi_diff)
+  arrange(
+    c(factor(family_comp, levels = dec_fam_comp)),
+    (factor(size, levels = dec_size)),
+    (factor(age, levels = dec_age)),
+    (factor(ownership, levels = dec_owner))
+  )
+nrow(combi_diff) #=> 173
 head(combi_diff)
 combi_diff$Probability <- 0
 
 #compter le nombre d'occurences de chaque combinaison dans la population synthétique et calculer la probabilité correspondante
 
 occu_com <- synth_pop2 %>%
-  count(total)
-occu_com$Probability <- occu_com$n / sum(occu_com$n)
-synt_pop_comb1 <- inner_join(synt_pop_comb, occu_com[, -2], by = "total")
-synt_pop_comb2 <- bind_rows(synt_pop_comb1, combi_diff)
+  count(total) # tableau du nombre des populations croisées
+occu_com$Probability <- occu_com$n / sum(occu_com$n) # fréquence
+synt_pop_comb1 <- inner_join(synt_pop_comb, occu_com[, -2], by = "total") # les combinaisons présentes dans la population synthétique
+synt_pop_comb2 <- bind_rows(synt_pop_comb1, combi_diff) # ajout des combinaisons ayant une probabilité nulle
 
 synt_pop_comb2 <- synt_pop_comb2 %>%
-  arrange(c(factor(family_comp, levels = dec_fam_comp)), (factor(size, levels =
-                                                                   dec_size)), (factor(age, levels = dec_age)), (factor(ownership, levels =
-                                                                                                                          dec_owner)))
+  arrange(
+    c(factor(family_comp, levels = dec_fam_comp)),
+    (factor(size, levels = dec_size)),
+    (factor(age, levels = dec_age)),
+    (factor(ownership, levels = dec_owner))
+  ) # de nouveau tri dans l'ordre de combi_diff
 
 head(synt_pop_comb2)
 
 final_joint_proba <- synt_pop_comb2$Probability
+# TODO remplacer la sortie par la sortie par une data frame avec les modalités croisées en plus de la probabilité
 length(which(final_joint_proba > 0)) # 187 cross-modalities with non zero probabilities
 sum(final_joint_proba)#1
+
+# cette étape calcule les probabilités croisées de la population synthétique et des probabilités nulles
 ```
 
 ## Script 2
@@ -156,8 +168,10 @@ decile_total # The dataframe decile_total represents the distribution of income 
 
 #Set for each modality a minimum income=0 and a maximum income = D9*1.5
 
-decile_total$D10 <- decile_total$D9 * 1.5
+decile_total$D10 <- decile_total$D9 * 1.5 # ajout du D10
+# TODO mettre en paramètre le 1.5
 D0 <- 0
+# TODO mettre en paramètre le 0 pour le D0
 decile_total <- add_column(decile_total, D0, .before = "D1")
 decile_size <- decile_total[c(1:5), ]
 decile_compo <- decile_total[c(6:11), ]
@@ -165,10 +179,9 @@ decile_age <- decile_total[c(12:17), ]
 decile_statut <- decile_total[c(18:19), ]
 
 numbers <- 1:10
-
 for (i in numbers) {
   numdeciles <- paste0("D", numbers)
-}
+} # boucle vraisemblablement inutile
 
 VecR <- function(x) {
   A <- as.data.frame(x[, c(numdeciles)])
@@ -177,11 +190,11 @@ VecR <- function(x) {
   return(C)
 }
 
-vec_all_incomes <- VecR(x = decile_total)
+vec_all_incomes <- VecR(x = decile_total) # récupère tous les déciles et trie par ordre croissant
 vec_all_incomes # 190 modalities for the income
 total_population_decile <-
   c(
-    10303.48,
+    10303.48, # valeurs issues des fichiers bruts de filosofi
     13336.07,
     16023.85,
     18631.33,
@@ -190,7 +203,7 @@ total_population_decile <-
     27774.44,
     32620.00,
     41308.00,
-    75090.00
+    75090.00 # max des déciles
   )
 
 #Linear extrapolation of these 190 incomes from the total population deciles ----
@@ -203,9 +216,9 @@ finterp <- function(x) {
            y,
            xout = income,
            method = "linear",
-           ties = "ordered")$y
+           ties = "ordered")$y # probabilité que le revenu soit inférieur à x, par comparaison linéaire avec les déciles de l'ensemble de la population total_population_decile
   C <- data.frame(income, proba1)
-  return (C)
+  return (C) # en sortie renvoie la probabilité pour chaque revenu avec l'information des revenus
 }
 
 p_R <- finterp(x = c(0, total_population_decile))
@@ -220,7 +233,7 @@ p_R <- finterp(x = c(0, total_population_decile))
 ### matrix of moment vector functions ----
 
 all_combinations <-
-  expand.grid(dec_owner, dec_age, dec_size, dec_fam_comp)
+  expand.grid(dec_owner, dec_age, dec_size, dec_fam_comp) # toutes les combinaisons des modalités
 
 all_combinations$total <-
   paste(
@@ -228,7 +241,7 @@ all_combinations$total <-
     all_combinations$Var2,
     all_combinations$Var3,
     all_combinations$Var4
-  )
+  ) # de nouveau une colonne total
 
 Gfonction <- function(z) {
   A <-
@@ -254,19 +267,25 @@ Gfonction <- function(z) {
         z$total
       )
     )
-  B[-vec, ] <- A
-  C <- B[-c(3, 9, 14, 20), ]# For each variable, delete one modality
+  B[-vec, ] <- A # on enlève la première ligne
+  C <- B[-c(3, 9, 14, 20), ]# For each variable, delete the last modality
+  # TODO enlever automatiquement la dernière modalité
   return(C)
 }
 
 
-Moment_mat <- Gfonction(z = all_combinations) # matrix of moment vector
+Moment_mat <- Gfonction(z = all_combinations) # matrix of moment vector = ici matrice des contraintes
+# constant row : contrainte naturelle
+# /!\ respecter l'ordre de la matrice
 
-### Estimation of constraints on deciles (  equation (22)  )----
+
+### Estimation of constraints on deciles (  equation (22) de l'article  )----
 
 ybis <- (0:10) / 10
 
 finterp2 <- function(x, z) {
+  x <- decile_compo
+  z <- vec_all_incomes
   A <- c()
   B <- c()
   C <- c()
@@ -274,7 +293,7 @@ finterp2 <- function(x, z) {
   x <- x[, -1]
   xbis <- split(x, seq(nrow(x)))
   for (i in 1:nrow(x)) {
-    B[[i]] <- rep(ybis, 1)
+    B[[i]] <- rep(ybis, 1) # déciles
     C[[i]] <- rep(z, 1)
     A[[i]] <-
       approx(xbis[[i]],
@@ -290,7 +309,7 @@ finterp2 <- function(x, z) {
 
 finterp_bis <- function(u, v, w) {
   A <- as.list(v)
-  B <- Map("*", u, A)
+  B <- Map("*", u, A) # calcul matriciel
   C <-
     as.data.frame (matrix(unlist(B), nrow = sapply(B, length), byrow = FALSE))
   names(C) <- names(v)
@@ -299,44 +318,34 @@ finterp_bis <- function(u, v, w) {
   return(D)
 }
 
-
+# calcul des probabilités pour tous les revenus (pour chaque modalité de chaque attribut)
 ech_compo <- finterp2(x = decile_compo, z = vec_all_incomes)
-
 ech_statut <- finterp2(x = decile_statut, z = vec_all_incomes)
-
 ech_age <- finterp2(x = decile_age, z = vec_all_incomes)
-
 ech_size <- finterp2(x = decile_size, z = vec_all_incomes)
 
-
+# dénominateur de l'équation 22 (ce devrait être les mêmes mais ils sont un peu différents)
 p_compo <- finterp_bis(u = ech_compo, v = prob_comp1, w = vec_all_incomes)
-
 p_size <- finterp_bis(u = ech_size, v = prob_size, w = vec_all_incomes)
-
 p_statut <- finterp_bis(u = ech_statut, v = prob_owner1, w = vec_all_incomes)
-
 p_age <- finterp_bis(u = ech_age, v = prob_age, w = vec_all_incomes)
 
 
 eta_fonction <- function(u, v, w) {
   A <- as.list(v)
-  B <- Map("*", u, A)
+  B <- Map("*", u, A) # calcul matriciel
   eta <- lapply(B, "/" , w)
 }
 
 
-constraint_composition <-
-  eta_fonction(u = ech_compo, v = prob_comp1, w = p_compo)
-
-constraint_statut <-
-  eta_fonction(u = ech_statut, v = prob_owner1, w = p_statut)
-
+constraint_composition <- eta_fonction(u = ech_compo, v = prob_comp1, w = p_compo)
+constraint_statut <- eta_fonction(u = ech_statut, v = prob_owner1, w = p_statut)
 constraint_size <- eta_fonction(u = ech_size, v = prob_size, w = p_size)
-
 constraint_age <- eta_fonction(u = ech_age, v = prob_age, w = p_age)
 
+##### fin de revue de code #####
 
-l1 <- list(rep(1, length(vec_all_incomes)))
+l1 <- list(rep(1, length(vec_all_incomes))) # contrainte naturelle (somme des probabilités = 1)
 
 eta_total <-
   c(l1,
@@ -361,21 +370,22 @@ eta_c <-
 
 A <- qr(t(Moment_mat))
 
-I <- A$pivot[1:A$rank]
+I <- A$pivot[1:A$rank] # indices des colonnes indépendantes (utile car Minxent ne veut pas de colonnes dépendentes entre elles)
 
-J = I[I > 1]
-
+J = I[I > 1] # indices des colonnes indépendantes sans la contrainte naturelle
+# ici le listing des colonnes indépendantes ne sert pas car toutes les colonnes sont finalement considérées comme indépendantes
+# TODO à voir si on garde ce code
 
 Vpj = as.matrix(final_joint_proba, length(final_joint_proba), 1)
 CVpj = diag(final_joint_proba) - Vpj %*% t(Vpj)
-CVpjG = Moment_mat[J, ] %*% CVpj %*% t(Moment_mat[J, ])
+CVpjG = Moment_mat[J, ] %*% CVpj %*% t(Moment_mat[J, ]) # gradient
 
 B = qr(CVpjG)
 B$rank
 Ii = c(1, J[B$pivot[1:B$rank]])
-Jj = Ii[-1]
-CVpjGr = Moment_mat[Jj, ] %*% CVpj %*% t(Moment_mat[Jj, ])
-kappa(CVpjGr)
+# Jj = Ii[-1] # sans le premier
+# CVpjGr = Moment_mat[Jj, ] %*% CVpj %*% t(Moment_mat[Jj, ])
+# kappa(CVpjGr)
 
 
 final_proba <- c()
@@ -389,10 +399,11 @@ for (i in 1:length(vec_all_incomes)) {
     ml = M[1]
     Coef_objectif = c(rep(0, mc), rep(1, ml))
     M_equation = cbind(Moment_mat[Iii, ], Id)
+    # vérification que les contraintes sont compatibles
     result = simplex(a = Coef_objectif,
                      A3 = M_equation,
                      b3 = eta_c[Iii, i])
-    if (abs(result$value) < 1e-8) {
+    if (abs(result$value) < 1e-8) { # TODO mettre en paramètre
       break
     }
     else{
@@ -415,7 +426,7 @@ for (i in 1:length(vec_all_incomes)) {
     },
     error = function(e) {
       message(c(as.character(i), '/ Erreur on minxent.multiple '))
-      Iii = Iii[1:2]
+      Iii = Iii[1:2] # seulement la première contrainte
       Sortie = minxent.single(
         q = final_joint_proba,
         G = Moment_mat[Iii, ],
