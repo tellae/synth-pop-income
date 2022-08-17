@@ -1,0 +1,775 @@
+---
+title: "Adding income to a synthetic population of Nantes"
+output:
+  html_document:
+    toc: true
+  pdf_document: default
+---
+
+```{r setup, echo=FALSE, warning=FALSE, message=FALSE}
+library(feather)
+library(dplyr)
+library(tibble)
+#library(minxent)
+library(purrr)
+library(tidyr)
+library(stringr)
+library(boot)
+library(ggplot2)
+library(reshape2)
+library(lattice)
+library(questionr)
+
+source("minxent-master/R/minxent.multiple.R")
+source("minxent-master/R/minxent.single.R")
+
+PATH_PROCESSED <- "../data/processed/"
+ORIGINAL_SYNTHETIC_POPULATION <- "synth_pop_original.feather"
+FILOSI_DECILES <- "deciles_filosofi.feather"
+```
+
+## Script 1 (4.1.1 dans l'article)
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Problem-solving heuristic :  step 1 (subsection 4.13)
+
+
+## Synthetic population loading and visualization ------
+
+#install.packages("feather") # : use this command if package feather is not yet installed
+
+synth_pop <-
+  read_feather(paste0(PATH_PROCESSED, ORIGINAL_SYNTHETIC_POPULATION)) #### commencer ici
+
+
+str(synth_pop)
+summary(synth_pop)
+
+# The dataframe synth_pop is the synthetic household population for the city of nantes.
+# We have 157,647 households. Each row of synth_pop is therefore a household.
+
+
+Age.lv<-c("0_29", "30_39",  "40_49", "50_59", "60_74", "75_or_more")
+
+Size.lv<-c("1_pers", "2_pers", "3_pers", "4_pers", "5_pers_or_more")
+
+Owner.lv<-c("Tenant","Owner")
+
+Fam_comp.lv<-c("Single_wom","Single_man","Couple_without_child","Couple_with_child","Single_parent","complex_hh")
+
+dec_owner<-c("Owner","Tenant")
+
+dec_fam_comp<-c("Single_man","Single_wom","Couple_without_child","Couple_with_child","Single_parent","complex_hh")
+
+dec_age<-c("0_29", "30_39",  "40_49", "50_59", "60_74", "75_or_more")
+
+dec_size<-c("1_pers", "2_pers", "3_pers", "4_pers", "5_pers_or_more")
+
+dec_total<-c(dec_size,dec_fam_comp,dec_age,dec_owner)
+
+
+
+
+
+#### Relative frequencies of the synthetic population ------
+
+
+prob_simple<-function(x){
+  A<-table(x)
+  B<-prop.table(A)
+  return(B)
+}
+
+prob_age<-c(prob_simple(synth_pop$age))
+
+
+prob_comp<-c(prob_simple(x=synth_pop$family_comp))
+
+
+prob_size<-c(prob_simple(x=synth_pop$size))
+
+
+prob_owner<-c(prob_simple(x=synth_pop$ownership))
+
+#modify the order of modalities
+
+prob_comp1<-c(prob_comp[2], prob_comp[1], prob_comp[3], prob_comp[4], prob_comp[5], prob_comp[6])
+prob_owner1<-c(prob_owner[2],prob_owner[1])
+
+
+prob_size
+prob_comp1
+prob_age
+prob_owner1
+
+
+
+
+#### Estimation of joint probabilities ------
+
+
+synth_pop2<-synth_pop
+
+synth_pop2$total<-paste(synth_pop2$ownership,synth_pop2$age,synth_pop2$size,synth_pop2$family_comp)
+
+synt_pop_comb<-expand.grid(ownership=levels(synth_pop$ownership),age=levels(synth_pop$age),size=levels(synth_pop$size),family_comp=levels(synth_pop$family_comp))
+
+synt_pop_comb$total<-paste(synt_pop_comb$ownership,synt_pop_comb$age,synt_pop_comb$size,synt_pop_comb$family_comp)
+
+#install.packages("dplyr") # : use this command if package dplyr is not yet installed
+
+combi_diff<-anti_join(synt_pop_comb,synth_pop2,by="total")
+
+combi_diff<-combi_diff%>%
+  arrange(c(factor(family_comp,levels=dec_fam_comp)),(factor(size,levels=dec_size)),(factor(age,levels=dec_age)),(factor(ownership,levels=dec_owner)))
+
+nrow(combi_diff)
+head(combi_diff)
+
+combi_diff$Probability<-0
+
+#compter le nombre d'occurences de chaque combinaison dans la population synthétique et calculer la probabilité correspondante
+
+occu_com<-synth_pop2%>%
+  count(total)
+
+occu_com$Probability<-occu_com$n/sum(occu_com$n)
+
+synt_pop_comb1<-inner_join(synt_pop_comb,occu_com[,-2],by="total")
+
+synt_pop_comb2<-bind_rows(synt_pop_comb1,combi_diff)
+
+synt_pop_comb2<-synt_pop_comb2%>%
+  arrange(c(factor(family_comp,levels=dec_fam_comp)),(factor(size,levels=dec_size)),(factor(age,levels=dec_age)),(factor(ownership,levels=dec_owner)))
+
+head(synt_pop_comb2)
+
+final_joint_proba<-synt_pop_comb2$Probability
+
+length(which(final_joint_proba>0)) # 187 cross-modalities with non zero probabilities
+
+sum(final_joint_proba)#1
+
+```
+
+## Script 2
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Problem-solving heuristic :  step 2 (subsection 4.13)
+
+
+## FiLoSoFi database loading and visisualization ----
+
+decile_total <- read_feather(paste0(PATH_PROCESSED, FILOSI_DECILES))
+
+decile_total # The dataframe decile_total represents the distribution of income deciles for the city of nantes.
+
+
+
+## Income vector ----
+
+#Set for each modality a minimum income=0 and a maximum income = D9*1.5
+
+decile_total$D10<-decile_total$D9*1.5
+D0<-0
+
+decile_total<-add_column(decile_total,D0,.before = "D1")
+
+decile_size <- decile_total[c(1:5),]
+
+decile_compo<- decile_total[c(6:11),]
+
+decile_age<- decile_total[c(12:17),]
+
+decile_statut<- decile_total[c(18:19),]
+
+
+numbers<-1:10
+
+for (i in numbers){
+  numdeciles<-paste0("D", numbers)
+}
+
+
+VecR<-function(x){
+  A<-as.data.frame(x[,c(numdeciles)])
+  B<-as.matrix(A)
+  C<-sort(as.vector(B), decreasing = FALSE)
+  return(C)
+}
+
+vec_all_incomes<-VecR(x=decile_total)
+
+vec_all_incomes # 190 modalities for the income
+
+total_population_decile<-c(10303.48, 13336.07, 16023.85, 18631.33, 21262.67, 24188.00, 27774.44, 32620.00, 41308.00, 75090.00)
+
+
+
+#Linear extrapolation of these 190 incomes from the total population deciles ----
+
+finterp<-function(x){
+  y<-(0:10)/10
+  income<-vec_all_incomes
+  proba1<-approx(x, y, xout = income, method = "linear", ties = "ordered")$y
+  C<-data.frame(income,proba1)
+  return (C)
+}
+
+p_R<-finterp(x=c(0,total_population_decile))  
+
+
+# In p_R dataframe, we have a probability for each income
+```
+
+## Script 3
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Problem-solving heuristic :  step 3 (subsection 4.15)
+
+#install.packages("minxent") # : use this command if package minxent is not yet installed
+
+### matrix of moment vector functions ----
+
+all_combinations <-expand.grid(dec_owner,dec_age,dec_size,dec_fam_comp)
+
+all_combinations$total<-paste(all_combinations$Var1,all_combinations$Var2,all_combinations$Var3,all_combinations$Var4)
+
+#install.packages("stringr") # : use this command if package stringr is not yet installed
+
+
+Gfonction<-function(z){
+  
+  A<-matrix(nrow = length(dec_total), ncol=nrow(z), dimnames=list(c(dec_owner, dec_age, dec_size, dec_fam_comp),z$total))
+  seq_noms<-rownames(A)
+  for (i in 1:length(seq_noms)){
+    A[i,]<-str_count(z[,5],seq_noms[i])
+  }
+  vec<-1
+  B<- matrix(1,nrow = length(dec_total)+1, ncol=nrow(z), dimnames=list(c("constant row", dec_owner, dec_age, dec_size, dec_fam_comp),z$total)) 
+  B[-vec,]<-A
+  C<-B[-c(3,9,14,20),]# For each variable, delete one modality
+  return(C)
+}
+
+
+Moment_mat<-Gfonction(z=all_combinations) # matrix of moment vector 
+
+
+### Estimation of constraints on deciles (  equation (22)  )----
+
+ybis<-(0:10)/10
+
+finterp2<-function(x,z){
+  A<-c()
+  B<-c()
+  C<-c()
+  D<-c()
+  x<-x[,-1]
+  xbis<-split(x,seq(nrow(x)))
+  for (i in 1:nrow(x)){
+    B[[i]]<-rep(ybis,1)
+    C[[i]]<-rep(z,1)
+    A[[i]]<-approx(xbis[[i]], B[[i]], xout = C[[i]], method = "linear", ties = "ordered")$y
+    D<-lapply(A,function (x) ifelse(is.na(x), 1.000000, x))    
+    }
+  return (D)
+}
+
+finterp_bis<-function(u,v,w){
+  A<-as.list(v) 
+  B<-Map("*",u,A)
+  C <-as.data.frame (matrix(unlist(B),nrow=sapply(B,length), byrow = FALSE))
+  names(C)<-names(v)
+  C$Proba<-apply(C,1,sum)
+  D<-C$Proba
+ return(D)
+}
+
+
+ech_compo<-finterp2(x=decile_compo,z=vec_all_incomes) 
+
+ech_statut<-finterp2(x=decile_statut,z=vec_all_incomes) 
+
+ech_age<-finterp2(x=decile_age,z=vec_all_incomes) 
+
+ech_size<-finterp2(x=decile_size,z=vec_all_incomes)
+
+
+p_compo<-finterp_bis(u=ech_compo,v=prob_comp1,w=vec_all_incomes)
+
+p_size<-finterp_bis(u=ech_size,v=prob_size,w=vec_all_incomes)
+
+p_statut<-finterp_bis(u=ech_statut,v=prob_owner1,w=vec_all_incomes)
+
+p_age<-finterp_bis(u=ech_age,v=prob_age,w=vec_all_incomes)
+
+
+eta_fonction<-function(u,v,w){
+  A<-as.list(v) 
+  B<-Map("*",u,A)
+  eta<-lapply(B, "/" , w)
+}
+
+
+constraint_composition<-eta_fonction(u=ech_compo,v=prob_comp1,w=p_compo)
+
+constraint_statut<-eta_fonction(u=ech_statut,v=prob_owner1,w=p_statut)
+
+constraint_size<-eta_fonction(u=ech_size,v=prob_size,w=p_size)
+
+constraint_age<-eta_fonction(u=ech_age,v=prob_age,w=p_age)
+
+
+l1 <- list(rep(1,length(vec_all_incomes))) 
+
+eta_total<-c(l1,constraint_statut,constraint_age,constraint_size,constraint_composition)
+
+eta_final<-eta_total[c(-3,-9,-14,-20)] # For each variable, delete one modality
+
+eta_c<-matrix(unlist(eta_final),nrow=length(eta_final), byrow = TRUE)
+
+# eta represents the vector of moment constraints
+
+
+### Cross entropy minimization using minxent package ----
+
+
+
+A<-qr(t(Moment_mat)) 
+
+I<-A$pivot[1:A$rank] 
+
+J=I[I>1] 
+
+
+Vpj=as.matrix(final_joint_proba,length(final_joint_proba),1) 
+CVpj=diag(final_joint_proba)- Vpj %*% t(Vpj) 
+CVpjG=Moment_mat[J,]%*%CVpj%*%t(Moment_mat[J,])
+
+#install.packages("boot") # : use this command if package boot is not yet installed
+
+
+B=qr(CVpjG) 
+B$rank 
+Ii=c(1,J[B$pivot[1:B$rank]])
+Jj=Ii[-1]
+CVpjGr=Moment_mat[Jj,]%*%CVpj%*%t(Moment_mat[Jj,])
+kappa(CVpjGr)
+
+
+final_proba<-c()
+
+for (i in 1:length(vec_all_incomes)){
+  
+  Iii=Ii
+  repeat{
+    Id=diag(eta_c[Iii,i])
+    M=dim(Moment_mat[Iii,])
+    mc=M[2] 
+    ml=M[1] 
+    Coef_objectif=c(rep(0,mc), rep(1,ml)) 
+    M_equation= cbind(Moment_mat[Iii,], Id)
+    result=simplex(
+      a=Coef_objectif,
+      A3=M_equation, 
+      b3=eta_c[Iii,i])
+    if (abs(result$value)<1e-8) {
+      
+      break}
+    else{
+      print(c(as.character(i), "incompatible system"))
+      indice_contrainte_violee=which.max(result$soln[seq(mc+1,mc+ml)])
+      Iii=Iii[-indice_contrainte_violee]    }
+    
+  }
+  
+  tryCatch (
+    expr = {
+      Sortie=minxent.multiple(q=final_joint_proba,G=Moment_mat[Iii,],eta = eta_c[Iii,i],lambda = rep(0,length(Iii)-1)) # mieux gérer les lambda
+    },
+    error = function(e){
+      message(c(as.character(i), '/ Erreur on minxent.multiple ' )) 
+      Iii=Iii[1:2]
+      Sortie=minxent.single(q=final_joint_proba,G=Moment_mat[Iii,],eta_c = eta[Iii,i],lambda = rep(0))
+    },
+    warning = function(w){
+      message('Caught a warning!')
+      print(w)
+    },
+    finally = {
+      final_proba[[i]]<-Sortie$Estimates #  
+    })
+}
+
+
+final_proba_v<-c()
+
+pop_synt_proba<-c() 
+
+all_proba<-c()
+
+
+list_proba_priori<-as.list(synt_pop_comb2[,5:6])
+
+
+for (i in 1:length(vec_all_incomes)){
+  print(i)
+  final_proba_v[[i]]<-c(final_proba[[i]])
+  
+  pop_synt_proba[[i]]<-rep(list_proba_priori,1)
+  
+  all_proba[[i]]<-c(pop_synt_proba[[i]],list(final_proba_v[[i]]))
+  
+  names(all_proba[[i]])<-c("modalities","priori_distribution","posteriori_distribution")
+  
+}
+
+compar_proba<-lapply(all_proba, as.data.frame)
+
+# compar_proba is a list of 190 items (each item = one income). Each item contains:
+#the priori distribution (joint probabilities in synthetic population)
+## the sought probabilities (p distribution, step 3 of the script).
+
+
+### Estimation of equation 2 paragraph 4.12 ----
+
+
+nonzero_proba<-c()
+compar_nonzero_proba<-c()
+
+for (i in 1:length(vec_all_incomes)){
+  
+  nonzero_proba[[i]]<-which(compar_proba[[i]]$priori_distribution==0)
+  
+  compar_nonzero_proba [[i]]<-compar_proba[[i]][- nonzero_proba[[i]],] #We only keep the nonzero probabilities
+  
+  compar_nonzero_proba[[i]]$ratio<-compar_nonzero_proba[[i]]$posteriori_distribution/compar_nonzero_proba[[i]]$priori_distribution
+  
+  compar_nonzero_proba[[i]]$p_R<-p_R[i,2] 
+  
+  compar_nonzero_proba[[i]]$results<-compar_nonzero_proba[[i]]$ratio*compar_nonzero_proba[[i]]$p_R
+  
+  compar_nonzero_proba[[i]]$incomes<-p_R[i,1]
+  
+ }
+
+table_c<-Reduce(rbind,compar_nonzero_proba)
+
+# table_c contains the total number of estimated probabilities (190*187 = 35530) (paragraph 5.1)
+
+head(table_c)
+
+# Interpretation for the first row:
+# the probability that a household has an income lower than 8370.625 given the 
+# following characteristics  Owner, 0_29, 1_pers, Single_man is 0.06073943
+
+## Estimation between two income values ----
+
+
+##Reprise demain mardi
+
+small_table <-table_c[,c(1,6,7)]
+
+small_table$new_results<-small_table$results
+
+
+small_table <-arrange(small_table,modalities, incomes)
+
+ newline<-seq(nrow(small_table))%>%
+  split (group_indices(small_table,modalities))%>%
+  map(~c(NA,.x))%>%
+  unlist
+
+small_table<-small_table[newline,]
+
+
+small_table<-small_table%>% 
+  fill(modalities, .direction="up") %>%
+  mutate(incomes= if_else(is.na(incomes), 0, incomes))%>%
+  mutate(new_results= if_else(is.na(new_results), 0, new_results))
+
+small_table<-small_table[,-2]
+
+small_table$box<-0
+
+
+small_table_l<-small_table%>%
+  group_split(modalities)
+
+for (i in 1:length(small_table_l)){
+  for(j in 2:192){
+    small_table_l[[i]][j,4]<-(small_table_l[[i]][j,3])-(small_table_l[[i]][j-1,3])
+  }
+}
+
+
+small_table1<-as.data.frame(Reduce(rbind,small_table_l))
+
+
+length(which(small_table1$new_results>1)) # probabilities > 1
+length(which(small_table1$box<0)) # negative probabilities
+
+```
+
+## Script 4
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Post-processing step and validation of results
+
+
+### Post-processing step ----
+
+res <-small_table %>%
+  group_by(modalities) %>%
+  mutate(
+    prob1 = if (any(new_results > 1)) min(incomes[new_results > 1]) else Inf,
+    box= ifelse(incomes >= prob1, 0, new_results)
+  ) %>%
+  dplyr::select(-prob1)
+
+res<-as.data.frame(res)
+
+
+repeat {
+  res <- res %>% group_by(modalities)  %>% 
+    dplyr::mutate(box_finales = box - dplyr::lag(box))
+  if (all(res$box_finales >= 0, na.rm = TRUE)) {
+    res <- ungroup(res)
+    break
+  } 
+  res <- dplyr::filter(res, is.na(box_finales) | box_finales >= 0)
+}
+res<-na.omit(as.data.frame(res))
+
+## Verification
+
+
+length(which(res$box_finales<0))
+length(which(res$new_results>1))
+
+#No more incorrect values
+
+## Allocate a specific income to each household of the synthetic population ----
+
+#install.packages("questionr")
+
+res<-res%>%
+  separate(modalities, c("ownership", "age", "size", "family_comp"), sep = " ")
+
+res[,c(1:4)] <-lapply(res[,c(1:4)] , as.factor)
+
+res$ownership<-factor(res$ownership, levels = c("Tenant", "Owner"))
+
+res$family_comp<-factor(res$family_comp, levels = c ("Single_wom","Single_man","Couple_with_child","Couple_without_child","Single_parent","complex_hh"))
+res<-arrange(res, ownership, age, size, family_comp)
+
+res2<-res%>%
+  group_by(ownership,age,size,family_comp)
+
+
+occu_com2<-occu_com[,c(1:2)] %>%
+  separate(total, c("ownership", "age", "size", "family_comp"), sep = " ")
+
+sum(occu_com2$n) #157647 households in the synthetic population
+
+occu_com2[,c(1:4)] <-lapply(occu_com2[,c(1:4)] , as.factor)
+
+occu_com2$ownership<-factor(occu_com2$ownership, levels = c("Tenant", "Owner"))
+
+occu_com2$family_comp<-factor(occu_com2$family_comp, levels = c ("Single_wom","Single_man","Couple_with_child","Couple_without_child","Single_parent","complex_hh"))
+
+occu_com2<-arrange(occu_com2, ownership, age, size, family_comp)
+
+occu_com3<-occu_com2%>%
+  group_by(ownership,age,size,family_comp)
+
+
+res_l<-group_split(res2)
+
+occu_com2_l<-group_split(occu_com3)
+
+tirage<-c()
+dist_tirage<-c()
+
+
+set.seed(1051)
+for (i in 1:length(res_l)){
+  tirage[[i]]<-sample(unique(res_l[[i]]$incomes),size =occu_com2_l[[i]]$n, prob=res_l[[i]]$box_finales, replace = TRUE )
+  dist_tirage[[i]]<-table(tirage[[i]])
+}
+
+
+liste_rev <- unique(unlist(lapply(dist_tirage, names)))
+
+
+matrice_estimation <- matrix(0, nrow = length(dist_tirage), ncol = length(liste_rev), 
+                             dimnames = list(names(dist_tirage), liste_rev))
+
+corresp <- lapply(dist_tirage, function(x) match(names(x), liste_rev))
+
+
+matrice_estimation[cbind(rep(sequence(nrow(matrice_estimation)), sapply(corresp, length)),
+                         unlist(corresp))] <- unlist(dist_tirage)
+
+matrice_estimation<-matrice_estimation[,order(as.integer(colnames(matrice_estimation)))]
+
+row.names(matrice_estimation)<-paste(occu_com2$ownership, occu_com2$age, occu_com2$size, occu_com2$family_comp)
+
+
+#view(matrice_estimation) # each row represent a modality and each column an income.
+
+
+# Example:  1505 represents the total number of households "Tenant 0_29 1_pers Single_wom " with an income less than 8370.625 
+
+sum(matrice_estimation[1,]);occu_com2[1,] #: in the synthetic population, the total number of households "Owner 30_39 1_pers Single_man" is 14613
+
+
+tableau_estimation<-as.data.frame.table(matrice_estimation)
+
+names(tableau_estimation)<-c("modalities","thresholds","total_hh")
+
+tableau_estimation$thresholds<-as.character(tableau_estimation$thresholds)
+
+tableau_estimation$thresholds<-as.numeric(tableau_estimation$thresholds)
+
+tableau_estimation<-arrange(tableau_estimation,modalities,thresholds)
+
+head(tableau_estimation)
+
+
+newline2<-seq(nrow(tableau_estimation))%>%
+  split (group_indices(tableau_estimation,modalities))%>%
+  map(~c(NA,.x))%>%
+  unlist
+
+tableau_estimation2<-tableau_estimation[newline2,]
+
+
+tableau_estimation2<-tableau_estimation2%>% 
+  fill(modalities, .direction="up")%>%
+  mutate(thresholds= if_else(is.na(thresholds), 0, thresholds))%>%
+  mutate(total_hh= if_else(is.na(total_hh), 0, total_hh))
+
+
+tableau_estimation2$thresholds_prev<-tableau_estimation2$thresholds
+tableau_estimation2$thresholds_after<-NA
+
+
+tableau_estimation2<-tableau_estimation2%>%
+  group_by(modalities)%>%
+  mutate(thresholds_after = dplyr::lag(thresholds))
+
+
+attri_men<-list()
+
+set.seed(1908)
+
+
+for (i in 1:nrow(tableau_estimation2)){
+  attri_men[[i]]<-runif(tableau_estimation2$total_hh[[i]], min = tableau_estimation2$thresholds_after[[i]], max=tableau_estimation2$thresholds_prev[[i]])
+}
+
+tableau_estimation_min<-tableau_estimation2[,1]
+
+
+tableau_estimation_min_l<-split(tableau_estimation_min,seq(nrow(tableau_estimation_min)))
+length(attri_men)
+length(tableau_estimation_min_l)
+
+attri_men[lengths(attri_men) == 0] <- NA
+
+pop_synt_rev<-na.omit(do.call(rbind.data.frame, Map(data.frame, modalities=tableau_estimation_min_l, hh_income=attri_men)))
+
+rownames(pop_synt_rev)<-NULL
+
+pop_synt_rev$modal<-pop_synt_rev$modalities
+
+pop_synt_rev<-arrange(pop_synt_rev,modalities, hh_income)%>%
+  separate(modal, c("ownership", "age", "size", "family_comp"), sep = " ")
+
+
+head(pop_synt_rev) # Each synthetic household has a specific income
+
+
+
+
+#### Validation of results
+
+## We first calculate simulated deciles from the specific incomes ----
+
+total_population_decile_simulated<- quantile (pop_synt_rev$hh_income, probs =  seq(0.1,0.9,0.1)) #Entire population simulated deciles
+
+dec_Ag<-aggregate(hh_income ~ age, pop_synt_rev, quantile, seq(0.1, 0.9, 0.1 ))
+
+dec_St<-aggregate(hh_income ~ ownership, pop_synt_rev, quantile, seq(0.1, 0.9, 0.1 ))
+
+dec_Co<-aggregate(hh_income ~ family_comp, pop_synt_rev, quantile, seq(0.1, 0.9, 0.1 ))
+
+dec_Si<-aggregate(hh_income ~ size, pop_synt_rev, quantile, seq(0.1, 0.9, 0.1 ))
+
+dec_Ag<-rename.variable(dec_Ag, "age", "modalities")
+dec_St<-rename.variable(dec_St, "ownership", "modalities")
+dec_Co<-rename.variable(dec_Co, "family_comp", "modalities")
+dec_Si<-rename.variable(dec_Si, "size", "modalities")
+
+sim1<-bind_rows(dec_Si, dec_Co, dec_Ag, dec_St)
+sim2<-as.data.frame(sim1$hh_income)
+sim3<-data.frame(t(total_population_decile_simulated))
+names(sim2)<-c("D1","D2","D3", "D4","D5","D6","D7","D8","D9")
+names(sim3)<-c("D1","D2","D3", "D4","D5","D6","D7","D8","D9")
+sim4<-bind_rows(sim3,sim2)
+
+simulated_deciles<-sim4[c(1:6,10,12,9,8,11,7,13:20),]
+modality<-c("Entire_population",decile_total$modality)
+simulated_deciles<-add_column(simulated_deciles, modality, .before = "D1")
+
+#view(simulated_deciles) # Table 3
+
+## Observed deciles from Fiosofi ----
+
+observed<-read_feather("deciles_filosofi.feather")
+obs1<-data.frame(t(total_population_decile[1:9]))
+obs1<-add_column(obs1, "Entire_population", .before = 1)
+names(obs1)<-names(observed)
+observed_deciles<-bind_rows(obs1,observed)
+view(observed_deciles)
+
+
+
+
+## Quantile-Quantile plots between simulated and observed deciles----
+
+#install.packages("ggplot2")
+#install.packages("reshape2")
+
+obs_deciles<-melt(data=observed_deciles, id.vars = "modality", variable.name = "Deciles", value.name = "Observed")
+sim_deciles<-melt(data=simulated_deciles,id.vars = "modality", variable.name = "Deciles", value.name = "Simulated")
+complet_deciles<-merge(obs_deciles,sim_deciles, by=c("modality","Deciles"))
+complet_deciles$modality<-factor(complet_deciles$modality,levels=c("1 person","2 persons","3 persons","4 persons", "5 persons or more", 
+                                                              "0_29", "30_39","40_49","50_59","60_74","75_or_more",
+                                                              "Single man","Single woman","Single parent family", "Couple  without children", "Couple  with children","Complex households",
+                                                              "Owner","Tenant","Entire_population"))
+p<-ggplot(complet_deciles,aes(Observed,Simulated,color=modality))
+p+geom_point(size=1.25)+geom_abline()+facet_wrap(~modality)+ theme(legend.position = "none")+theme(axis.text=element_text(size=7))
+
+
+
+## Absolute and relative errors ----
+
+abs_errors<-abs(round(observed_deciles[,-1])-round(simulated_deciles[,-1]))
+
+rel_errors<-round(((abs_errors/round(observed_deciles[,-1]))*100),digits=2)
+
+
+abs_errors<-add_column(abs_errors, observed_deciles$modality, .before = 1) #table 4
+
+rel_errors<-add_column(rel_errors, observed_deciles$modality, .before = 1) #table 5
+
+abs_errors
+rel_errors
+```
